@@ -28,7 +28,7 @@ const parts = computed(() => {
 </template>
 <style scoped>
 mark {
-  background: rgb(255 115 174 / 38%);
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
   color: inherit;
   border-radius: 2px;
   padding: 0;

@@ -1,11 +1,12 @@
 :root {
   color-scheme: light;
+  accent-color: var(--accent);
   --bg: #f5f6f8;
   --surface: #ffffff;
   --text: #1f2329;
   --text-2: #6b7280;
   --border: #e3e5e8;
-  --accent: #4f6ef7;
+  --accent: #ee8fab;
   --danger: #e5484d;
 }
 :root[data-theme='dark'] {
@@ -15,7 +16,7 @@
   --text: #e6e8eb;
   --text-2: #9aa1ad;
   --border: #2f333b;
-  --accent: #6f8bff;
+  --accent: #ee8fab;
   --danger: #ff6b70;
 }
 * {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, computed, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, computed, ref, watch, nextTick } from 'vue'
 import type { Category, Item, ItemInput, Status } from '../../../shared/types'
 import { CHROME_COLORS } from '../../../shared/theme'
 import BangumiSearch from './components/BangumiSearch.vue'
@@ -9,8 +9,93 @@ import ItemEditor from './components/ItemEditor.vue'
 import { CATEGORIES, statusesFor, coverUrl } from './constants'
 
 import { sortItems, type SortOrder } from './sort'
+import CategoryNavigation from './components/CategoryNavigation.vue'
 
-const sortOrder = ref<SortOrder>('created')
+type HomeCategory = Category | 'all'
+const categoryOptions: { value: HomeCategory; label: string }[] = [
+  { value: 'all', label: '全部' },
+  ...CATEGORIES
+]
+const savedInitial = localStorage.getItem('initialCategory')
+const initialCategory = ref<HomeCategory>(
+  categoryOptions.find((c) => c.value === savedInitial)?.value ?? 'all'
+)
+watch(initialCategory, (value) => {
+  localStorage.setItem('initialCategory', value)
+  if (value !== 'all' && !visibleCategories.value.includes(value))
+    visibleCategories.value.push(value)
+})
+interface HomeTab {
+  id: number
+  category: HomeCategory
+  status: Status | 'all'
+  keyword: string
+  sortOrder: SortOrder
+  scroll: number
+}
+let nextTabId = 1
+function createHomeTab(): HomeTab {
+  return {
+    id: nextTabId++,
+    category: initialCategory.value,
+    status: 'all',
+    keyword: '',
+    sortOrder: 'created',
+    scroll: 0
+  }
+}
+const homeTabs = ref<HomeTab[]>([createHomeTab()])
+const activeTabId = ref(homeTabs.value[0].id)
+const activeTab = computed(() => homeTabs.value.find((tab) => tab.id === activeTabId.value)!)
+const category = computed({
+  get: () => activeTab.value.category,
+  set: (value: HomeCategory) => {
+    activeTab.value.category = value
+  }
+})
+const status = computed({
+  get: () => activeTab.value.status,
+  set: (value: Status | 'all') => {
+    activeTab.value.status = value
+  }
+})
+const keyword = computed({
+  get: () => activeTab.value.keyword,
+  set: (value: string) => {
+    activeTab.value.keyword = value
+  }
+})
+const sortOrder = computed({
+  get: () => activeTab.value.sortOrder,
+  set: (value: SortOrder) => {
+    activeTab.value.sortOrder = value
+  }
+})
+function selectTab(id: number): void {
+  if (id === activeTabId.value || batchBusy.value) return
+  activeTab.value.scroll = window.scrollY
+  cancelManagement()
+  menuOpen.value = false
+  filterMenu.value?.removeAttribute('open')
+  activeTabId.value = id
+  void nextTick(() => {
+    window.scrollTo(0, activeTab.value.scroll)
+    document
+      .getElementById(`home-tab-${id}`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  })
+}
+function addHomeTab(): void {
+  const tab = createHomeTab()
+  homeTabs.value.push(tab)
+  selectTab(tab.id)
+}
+function closeHomeTab(id: number): void {
+  const index = homeTabs.value.findIndex((tab) => tab.id === id)
+  if (index <= 0 || batchBusy.value) return
+  if (activeTabId.value === id) selectTab(homeTabs.value[index - 1].id)
+  homeTabs.value.splice(index, 1)
+}
 const filterMenu = ref<HTMLDetailsElement | null>(null)
 function dismissFilter(event: PointerEvent): void {
   if (event.target instanceof Node && !filterMenu.value?.contains(event.target))
@@ -73,7 +158,6 @@ function toggleMode(): void {
 }
 const items = ref<Item[]>([])
 const sortedItems = computed(() => sortItems(items.value, sortOrder.value))
-const category = ref<Category | 'all'>('all')
 function loadVisibleCategories(): Category[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem('visibleCategories') ?? 'null')
@@ -85,19 +169,22 @@ function loadVisibleCategories(): Category[] {
 }
 const visibleCategories = ref<Category[]>(loadVisibleCategories())
 const navigationCategories = computed(() =>
-  CATEGORIES.filter((c) => visibleCategories.value.includes(c.value))
+  categoryOptions.filter((c) => c.value === 'all' || visibleCategories.value.includes(c.value))
 )
+if (initialCategory.value !== 'all' && !visibleCategories.value.includes(initialCategory.value))
+  visibleCategories.value.push(initialCategory.value)
 watch(
   visibleCategories,
   () => {
     localStorage.setItem('visibleCategories', JSON.stringify(visibleCategories.value))
-    if (category.value !== 'all' && !visibleCategories.value.includes(category.value))
-      category.value = 'all'
+    for (const tab of homeTabs.value)
+      if (tab.category !== 'all' && !visibleCategories.value.includes(tab.category))
+        tab.category = 'all'
+    if (initialCategory.value !== 'all' && !visibleCategories.value.includes(initialCategory.value))
+      initialCategory.value = 'all'
   },
   { deep: true }
 )
-const status = ref<Status | 'all'>('all')
-const keyword = ref('')
 watch([category, status, keyword], () => {
   selectedIds.value = new Set()
 })
@@ -129,7 +216,7 @@ function matchesSettings(section: 'appearance' | 'general' | 'display'): boolean
   const text = {
     appearance: '外观 主题 浅色 深色 字体 默认字体',
     general: '通用 语言 中文 English',
-    display: '显示 导航栏 展示 动画 电影 书籍 视觉小说'
+    display: '显示 导航栏 展示 初始界面 启动 默认 全部 动画 电影 书籍 视觉小说'
   }[section]
   return text.toLowerCase().includes(settingsQuery.value.trim().toLowerCase())
 }
@@ -139,6 +226,7 @@ watch(settingsQuery, () => {
     if (match) settingsSection.value = match
   }
 })
+const navigationReset = ref(0)
 const language = ref('zh')
 const font = ref(localStorage.getItem('font') ?? '')
 const fonts = ref<string[]>([])
@@ -171,6 +259,9 @@ async function loadFonts(): Promise<void> {
 }
 function resetSettings(): void {
   resetDialog.value?.close()
+  initialCategory.value = 'all'
+  navigationReset.value++
+  localStorage.removeItem('categoryOrder')
   visibleCategories.value = CATEGORIES.map((c) => c.value)
   font.value = ''
   applyFont()
@@ -198,6 +289,11 @@ function onSettingsClosed(): void {
   gearButton.value?.focus()
 }
 function onKeydown(event: KeyboardEvent): void {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w') {
+    event.preventDefault()
+    if (!document.querySelector('dialog[open]')) closeHomeTab(activeTabId.value)
+    return
+  }
   if (event.key === 'Escape' && filterMenu.value?.open) {
     filterMenu.value.open = false
     filterMenu.value.querySelector('summary')?.focus()
@@ -277,12 +373,55 @@ watch([showSearch, showEditor, settingsOpen, batchOpen], () => {
     .catch(console.error)
 })
 
-watch([category, status, keyword], load, { immediate: true })
+watch([activeTabId, category, status, keyword], load, { immediate: true })
 </script>
 
 <template>
   <div class="app-shell" :class="{ 'windows-shell': isWindows }">
-    <div v-if="isWindows" class="window-titlebar"><span>media-tracker</span></div>
+    <div class="window-titlebar">
+      <TransitionGroup
+        name="home-tab"
+        tag="div"
+        class="home-tabs"
+        role="tablist"
+        aria-label="主页标签页"
+      >
+        <div
+          v-for="(tab, index) in homeTabs"
+          :key="tab.id"
+          class="home-tab"
+          :class="{ active: activeTabId === tab.id }"
+        >
+          <button
+            :id="`home-tab-${tab.id}`"
+            class="home-tab-select"
+            role="tab"
+            :aria-selected="activeTabId === tab.id"
+            aria-controls="home-panel"
+            @click="selectTab(tab.id)"
+          >
+            主页
+          </button>
+          <button
+            v-if="index > 0"
+            class="home-tab-close"
+            aria-label="关闭主页标签页"
+            title="关闭标签页 (Ctrl+W)"
+            @click="closeHomeTab(tab.id)"
+          >
+            ×
+          </button>
+        </div>
+      </TransitionGroup>
+      <button
+        class="new-home-tab"
+        aria-label="新建主页标签页"
+        title="新建主页标签页"
+        @click="addHomeTab"
+      >
+        +
+      </button>
+    </div>
     <aside class="sidebar" aria-label="应用导航">
       <span class="home-placeholder" role="img" aria-label="主页" title="主页">
         <svg
@@ -301,7 +440,7 @@ watch([category, status, keyword], load, { immediate: true })
           />
         </svg>
       </span>
-      <span class="pen-placeholder" role="img" aria-label="钢笔" title="钢笔">
+      <span class="pen-placeholder" role="img" aria-label="笔记" title="笔记">
         <svg
           width="22"
           height="22"
@@ -313,8 +452,7 @@ watch([category, status, keyword], load, { immediate: true })
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d="m15 3 6 6-4 4-6-6 4-4ZM11 7 5 9 3 21l12-2 2-6M3 21l7-7" />
-          <circle cx="11" cy="13" r="1.5" />
+          <path d="m16 3 5 5L8 21H3v-5L16 3ZM13 6l5 5M3 16l5 5" />
         </svg>
       </span>
       <button
@@ -347,7 +485,12 @@ watch([category, status, keyword], load, { immediate: true })
       <button @click="toggleMode">切换编辑/鉴赏模式</button>
       <button @click="openSettings">设置</button>
     </nav>
-    <div class="workspace">
+    <div
+      id="home-panel"
+      class="workspace"
+      role="tabpanel"
+      :aria-labelledby="`home-tab-${activeTabId}`"
+    >
       <header class="toolbar">
         <div class="brand">
           <svg
@@ -361,26 +504,13 @@ watch([category, status, keyword], load, { immediate: true })
           >
             <rect x="4" y="3" width="16" height="18" rx="3" />
             <path d="M8 7h8M8 11h8M8 15h4" /></svg
-          ><span>abc</span>
+          ><span>note</span>
         </div>
-        <div class="tabs" role="group" aria-label="作品分类">
-          <button
-            :aria-pressed="category === 'all'"
-            :class="{ on: category === 'all' }"
-            @click="category = 'all'"
-          >
-            全部
-          </button>
-          <button
-            v-for="c in navigationCategories"
-            :key="c.value"
-            :aria-pressed="category === c.value"
-            :class="{ on: category === c.value }"
-            @click="category = c.value"
-          >
-            {{ c.label }}
-          </button>
-        </div>
+        <CategoryNavigation
+          :key="navigationReset"
+          v-model="category"
+          :options="navigationCategories"
+        />
 
         <input
           v-model="keyword"
@@ -590,7 +720,9 @@ watch([category, status, keyword], load, { immediate: true })
               </div>
               <label class="settings-row font-row"
                 ><span class="setting-name"
-                  ><HighlightText text="字体" :query="settingsQuery" /><small>设置界面字体。</small></span
+                  ><HighlightText text="字体" :query="settingsQuery" /><small
+                    >设置界面字体。</small
+                  ></span
                 >
                 <select v-model="font" :disabled="fontLoading">
                   <option value="">默认字体</option>
@@ -612,7 +744,9 @@ watch([category, status, keyword], load, { immediate: true })
             <div class="settings-group">
               <label class="settings-row"
                 ><span class="setting-name"
-                  ><HighlightText text="语言" :query="settingsQuery" /><small>设置界面语言。</small></span
+                  ><HighlightText text="语言" :query="settingsQuery" /><small
+                    >设置界面语言。</small
+                  ></span
                 >
                 <select v-model="language">
                   <option value="zh">简体中文</option>
@@ -630,7 +764,9 @@ watch([category, status, keyword], load, { immediate: true })
             <div class="settings-group">
               <div class="settings-row">
                 <span class="setting-name"
-                  ><HighlightText text="展示" :query="settingsQuery" /><small>设置顶部导航栏显示的分类。</small></span
+                  ><HighlightText text="展示" :query="settingsQuery" /><small
+                    >设置顶部导航栏显示的分类。</small
+                  ></span
                 >
                 <div class="category-checks" role="group" aria-label="展示分类">
                   <label v-for="c in CATEGORIES" :key="c.value"
@@ -639,6 +775,25 @@ watch([category, status, keyword], load, { immediate: true })
                       type="checkbox"
                       :value="c.value" /><HighlightText :text="c.label" :query="settingsQuery"
                   /></label>
+                </div>
+              </div>
+            </div>
+            <h3 class="initial-heading">
+              <HighlightText text="初始界面" :query="settingsQuery" />
+            </h3>
+            <div class="settings-group">
+              <div class="settings-row">
+                <span class="setting-name"><small>设置软件启动时默认显示的界面。</small></span>
+                <div class="category-checks" role="radiogroup" aria-label="初始界面">
+                  <label v-for="c in categoryOptions" :key="c.value">
+                    <input
+                      v-model="initialCategory"
+                      type="radio"
+                      name="initial-category"
+                      :value="c.value"
+                    />
+                    <HighlightText :text="c.label" :query="settingsQuery" />
+                  </label>
                 </div>
               </div>
             </div>
@@ -698,6 +853,100 @@ watch([category, status, keyword], load, { immediate: true })
 </template>
 
 <style scoped>
+.settings-content .initial-heading {
+  margin-top: 24px;
+}
+.windows-shell .window-titlebar {
+  padding-right: 150px;
+}
+.home-tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+.home-tab {
+  display: flex;
+  flex: 0 0 auto;
+  width: 180px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  align-items: center;
+  border-radius: 6px 6px 0 0;
+  height: 30px;
+  border: 1px solid transparent;
+}
+.home-tab-enter-active,
+.home-tab-leave-active {
+  transition:
+    width 220ms ease,
+    opacity 180ms ease,
+    transform 220ms ease;
+  pointer-events: none;
+}
+.home-tab-enter-from,
+.home-tab-leave-to {
+  width: 0;
+  opacity: 0;
+  transform: translateX(-8px);
+  border-left-width: 0;
+  border-right-width: 0;
+}
+.home-tab-close {
+  flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-tab-enter-active,
+  .home-tab-leave-active {
+    transition: none;
+  }
+}
+.home-tab.active {
+  background: var(--bg);
+  border-color: var(--border);
+  border-bottom-color: var(--bg);
+}
+.home-tab-select {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 3px 10px;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+}
+.home-tab-close,
+.new-home-tab {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  -webkit-app-region: no-drag;
+}
+.home-tab-close {
+  width: 22px;
+  height: 22px;
+  margin-right: 5px;
+  font-size: 18px;
+}
+.new-home-tab {
+  width: 28px;
+  height: 25px;
+  flex-shrink: 0;
+  margin: 0 4px;
+  font-size: 18.4px;
+  color: #aeb3bc;
+}
+.home-tab-close:hover,
+.new-home-tab:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
 .category-checks {
   display: flex;
   flex-wrap: wrap;
@@ -734,8 +983,8 @@ button.batch-delete {
   z-index: 1;
 }
 .selection-box.checked {
-  background: #777;
-  border-color: #777;
+  background: var(--accent);
+  border-color: var(--accent);
   color: white;
 }
 .card:focus-visible {
@@ -939,21 +1188,33 @@ button:disabled {
 }
 
 .app-shell {
-  --titlebar-height: 0px;
+  --titlebar-height: 33px;
+  --sidebar-width: 42px;
   padding-top: var(--titlebar-height);
 }
 .windows-shell {
-  --titlebar-height: 28px;
+  --titlebar-height: 33px;
+}
+/* Continue the sidebar border through the titlebar without intercepting input. */
+.window-titlebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-width) - 1px);
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
 }
 .window-titlebar {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: 28px;
+  height: var(--titlebar-height);
   display: flex;
   align-items: center;
-  padding: 0 150px 0 12px;
+  padding: 3px 12px 0 var(--sidebar-width);
   background: var(--chrome-bg);
   color: var(--text-2);
   font-size: 12px;
@@ -984,7 +1245,7 @@ button:disabled {
 .sidebar {
   position: fixed;
   inset: var(--titlebar-height) auto 0 0;
-  width: 42px;
+  width: var(--sidebar-width);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1011,7 +1272,7 @@ button:disabled {
   border-color: var(--border);
 }
 .workspace {
-  margin-left: 42px;
+  margin-left: var(--sidebar-width);
   min-width: 0;
 }
 .menu-dismiss {

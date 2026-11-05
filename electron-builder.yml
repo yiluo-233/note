@@ -12,6 +12,7 @@ files:
 asarUnpack:
   - resources/**
 win:
+  icon: resources/icon.ico
   executableName: media-tracker
 nsis:
   artifactName: ${name}-${version}-setup.${ext}

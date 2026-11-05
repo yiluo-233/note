@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/icon.webp?asset'
+import icon from '../../resources/icon.png?asset'
 import { CHROME_COLORS, CHROME_TEXT } from '../../shared/theme'
 import { loadWindowState, rememberWindowState } from './window-state'
 import { initDb } from './db'
@@ -22,11 +22,11 @@ function createWindow(): void {
           titleBarOverlay: {
             color: CHROME_COLORS[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'],
             symbolColor: CHROME_TEXT[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'],
-            height: 28
+            height: 33
           }
         }
       : {}),
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
