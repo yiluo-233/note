@@ -22,7 +22,7 @@ function catalog(bangumi, neo = async () => [], existing = new Set()) {
   return loadSource('src/main/catalog.ts', {
     './bangumi': { searchBangumi: bangumi },
     './neodb': { searchNeo: neo },
-    './db': { listSourceKeys: () => existing }
+    './database': { listSourceKeys: () => existing }
   })
 }
 

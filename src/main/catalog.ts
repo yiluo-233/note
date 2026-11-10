@@ -1,7 +1,7 @@
 /** 聚合搜索：合并来源、统一排序、缓存远程资料并实时标记书架状态。 */
 import { searchBangumi, importBangumi } from './bangumi'
 import { searchNeo, importNeo } from './neodb'
-import { listSourceKeys } from './db'
+import { listSourceKeys } from './database'
 import { normalizeSearchText, titleMatchScore } from './search-text'
 import type { Category } from '../../shared/types'
 import {

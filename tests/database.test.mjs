@@ -7,7 +7,7 @@ import { loadSource } from './load-source.mjs'
 function database(context) {
   const connection = new DatabaseSync(':memory:')
   context.after(() => connection.close())
-  const api = loadSource('src/main/db.ts', {
+  const api = loadSource('src/main/database.ts', {
     electron: { app: { getPath: () => '.' } },
     'node:sqlite': {
       DatabaseSync: class {

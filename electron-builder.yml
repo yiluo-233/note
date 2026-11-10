@@ -1,6 +1,11 @@
 # 打包配置：定义平台资源、安装包格式和运行时文件范围。
-appId: com.electron.app
-productName: media-tracker
+appId: com.note.app
+productName: note
+publish:
+  provider: github
+  owner: yiluo-233
+  repo: note
+  releaseType: release
 directories:
   buildResources: build
 files:
@@ -16,12 +21,19 @@ asarUnpack:
   - resources/**
 win:
   icon: resources/icon.ico
-  executableName: media-tracker
+  executableName: note
 nsis:
+  oneClick: false
+  # 自定义页面统一提供安装路径和快捷方式选项。
+  allowToChangeInstallationDirectory: false
+  include: build/installer.nsh
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

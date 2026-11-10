@@ -1,6 +1,6 @@
 {
-  "name": "media-tracker",
-  "version": "1.0.1",
+  "name": "note",
+  "version": "1.0.0",
   "description": "本地书影音管理工具",
   "main": "./out/main/index.js",
   "author": "example.com",
@@ -18,12 +18,14 @@
     "build": "npm run typecheck && electron-vite build",
     "postinstall": "install-electron && electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
+    "build:win": "npm run build && electron-builder --win --publish never",
+    "release:win": "npm run build && electron-builder --win --publish always",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
-    "@electron-toolkit/utils": "^4.0.0"
+    "@electron-toolkit/utils": "^4.0.0",
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.1",

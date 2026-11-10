@@ -1,7 +1,7 @@
 /** NeoDB 数据源：按分类检索、识别关联条目并生成导入草稿。 */
 import { net } from 'electron'
 import { downloadCover } from './covers'
-import { hasSourceItem } from './db'
+import { hasSourceItem } from './database'
 import type { Category } from '../../shared/types'
 import type { CatalogEntry, ImportDraft } from '../../shared/bangumi'
 interface NeoItem {
@@ -26,7 +26,7 @@ interface NeoItem {
 
 async function neoRequest(path: string): Promise<unknown> {
   const response = await net.fetch('https://neodb.social/api/' + path, {
-    headers: { 'Accept-Language': 'zh-CN', 'User-Agent': 'media-tracker/1.0' },
+    headers: { 'Accept-Language': 'zh-CN', 'User-Agent': 'note/1.0' },
     signal: AbortSignal.timeout(15000)
   })
   if (!response.ok) {

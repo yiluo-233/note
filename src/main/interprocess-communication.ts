@@ -1,11 +1,12 @@
 /** 进程通信：注册界面调用的作品、搜索、主题、字体和封面接口。 */
 import { ipcMain, nativeTheme, BrowserWindow } from 'electron'
-import { addItem, deleteItems, deleteItem, listItems, listTags, updateItem } from './db'
+import { addItem, deleteItems, deleteItem, listItems, listTags, updateItem } from './database'
 import type { ItemFilter, ItemInput } from '../../shared/types'
 import { CHROME_COLORS, CHROME_TEXT } from '../../shared/theme'
 import { searchCatalog, importCatalog } from './catalog'
 import { listFonts } from './fonts'
 import { pickCover } from './covers'
+import { checkForUpdates } from './updates'
 
 /** 与弹窗遮罩保持一致，压暗原生窗口控件颜色。 */
 function dim(hex: string): string {
@@ -23,6 +24,7 @@ function dim(hex: string): string {
 }
 
 export function registerIpc(): void {
+  ipcMain.handle('updates:check', () => checkForUpdates())
   ipcMain.handle('fonts:list', () => listFonts())
   ipcMain.handle('bangumi:search', (_e, keyword, category, offset) =>
     searchCatalog(keyword, category, offset)

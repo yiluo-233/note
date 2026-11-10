@@ -1,8 +1,9 @@
 /** 预加载桥接：向渲染进程暴露受控的异步业务接口。 */
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppApi } from '../../shared/api'
+import type { AppApi } from '../../shared/application-interface'
 
 const api: AppApi = {
+  updates: { check: () => ipcRenderer.invoke('updates:check') },
   fonts: { list: () => ipcRenderer.invoke('fonts:list') },
   bangumi: {
     search: (keyword, category, offset) =>

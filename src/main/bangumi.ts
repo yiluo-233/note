@@ -1,7 +1,7 @@
 /** Bangumi 数据源：搜索作品、转换条目并生成导入草稿。 */
 import { net } from 'electron'
 import { downloadCover } from './covers'
-import { hasSourceItem } from './db'
+import { hasSourceItem } from './database'
 import type { Category } from '../../shared/types'
 import type { CatalogPage, ImportDraft } from '../../shared/bangumi'
 interface Subject {
@@ -19,7 +19,7 @@ const types: Record<Category, number> = { novel: 1, anime: 2, movie: 6, galgame:
 const categories: Record<number, Category> = { 1: 'novel', 2: 'anime', 6: 'movie', 4: 'galgame' }
 const labels: Record<number, string> = { 1: '书籍', 2: '动画', 6: '三次元', 4: '视觉小说' }
 const headers = {
-  'User-Agent': 'media-tracker/1.0 (personal desktop library)',
+  'User-Agent': 'note/1.0 (personal desktop library)',
   'Content-Type': 'application/json'
 }
 

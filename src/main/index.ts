@@ -5,9 +5,10 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { CHROME_COLORS, CHROME_TEXT } from '../../shared/theme'
 import { loadWindowState, rememberWindowState } from './window-state'
-import { initDb } from './db'
-import { registerIpc } from './ipc'
+import { initDb } from './database'
+import { registerIpc } from './interprocess-communication'
 import { registerCoverProtocol, registerCoverScheme } from './covers'
+import { checkForUpdates } from './updates'
 
 function createWindow(): void {
   const windowState = loadWindowState()
@@ -59,13 +60,17 @@ app.whenReady().then(() => {
   registerIpc()
   registerCoverProtocol()
 
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.note.app')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
   createWindow()
+
+  if (app.isPackaged && process.platform === 'win32') {
+    setTimeout(() => void checkForUpdates(false), 15000).unref()
+  }
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {

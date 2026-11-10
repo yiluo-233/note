@@ -364,7 +364,17 @@ function onSettingsClosed(): void {
 }
 
 .settings-group > .settings-row + .settings-row {
-  border-top: 1px solid var(--border);
+  position: relative;
+}
+
+.settings-group > .settings-row + .settings-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 15px;
+  right: 15px;
+  height: 1px;
+  background: var(--border);
 }
 
 .reset-dialog {
@@ -512,7 +522,7 @@ function onSettingsClosed(): void {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  padding: 10px;
+  padding: 15px 10px;
   border: 0;
   border-radius: 0;
   background: transparent;

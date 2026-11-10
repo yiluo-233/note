@@ -4,6 +4,7 @@ import type { SearchPage, ImportDraft } from './bangumi'
 import type { Theme } from './theme'
 
 export interface AppApi {
+  updates: { check: () => Promise<void> }
   fonts: { list: () => Promise<string[]> }
   bangumi: {
     search: (keyword: string, category?: Category, offset?: number) => Promise<SearchPage>
