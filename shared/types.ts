@@ -1,4 +1,6 @@
+/** 业务类型：定义作品、分类、状态和查询条件。 */
 export type Category = 'novel' | 'anime' | 'movie' | 'galgame'
+export type HomeCategory = Category | 'all'
 export type Status = 'wish' | 'doing' | 'done'
 
 export interface Item {
@@ -13,7 +15,7 @@ export interface Item {
   rating: number | null // 0~10，步进 0.5，null 表示未评分
   review: string
   tags: string[]
-  source: string // 'bangumi' | 'vndb' | 'tmdb' | 'manual'
+  source: string // 数据来源：Bangumi、NeoDB 或手动录入
   sourceId: string
   createdAt: number
   updatedAt: number

@@ -1,3 +1,4 @@
+/** 窗口状态：保存尺寸与最大化状态，启动时限制在可用屏幕范围内。 */
 import { app, screen, type BrowserWindow } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,6 +8,7 @@ interface WindowState {
   height: number
   maximized: boolean
 }
+
 const defaults: WindowState = { width: 900, height: 670, maximized: false }
 
 export function loadWindowState(): WindowState {
@@ -24,7 +26,7 @@ export function loadWindowState(): WindowState {
       state = { width: saved.width, height: saved.height, maximized: saved.maximized === true }
     }
   } catch {
-    /* First launch or invalid settings: use defaults. */
+    /* 首次启动或配置无效时使用默认值。 */
   }
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
   state.width = Math.min(width, Math.max(400, state.width))
@@ -42,7 +44,7 @@ export function rememberWindowState(window: BrowserWindow): void {
         'utf8'
       )
     } catch (error) {
-      console.error('Failed to save window size', error)
+      console.error('保存窗口尺寸失败', error)
     }
   })
 }

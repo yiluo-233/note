@@ -1,21 +1,26 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import type { Category } from '../../../../shared/types'
+/** 分类导航：保存排列顺序，处理受限拖拽、换位和回落动画。 */
 
-type Value = Category | 'all'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import type { HomeCategory } from '../../../../shared/types'
+import { HOME_CATEGORIES } from '../constants'
+
+type Value = HomeCategory
 const props = defineProps<{ modelValue: Value; options: { value: Value; label: string }[] }>()
 const emit = defineEmits<{ 'update:modelValue': [value: Value] }>()
-const defaults: Value[] = ['all', 'anime', 'novel', 'movie', 'galgame']
+const defaults = HOME_CATEGORIES.map((category) => category.value)
 function readOrder(): Value[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem('categoryOrder') ?? 'null')
-    if (Array.isArray(saved))
+    if (Array.isArray(saved)) {
       return [...new Set([...saved.filter((v): v is Value => defaults.includes(v)), ...defaults])]
+    }
   } catch {
-    /* Ignore invalid stored preferences. */
+    /* 忽略无效的已保存偏好。 */
   }
   return [...defaults]
 }
+
 const order = ref(readOrder())
 const options = computed(() =>
   order.value.flatMap((value) => props.options.filter((c) => c.value === value))
@@ -24,10 +29,10 @@ const root = ref<HTMLElement>()
 const dragging = ref<Value | null>(null)
 const floating = ref(false)
 const settling = ref(false)
-const x = ref(0),
-  y = ref(0),
-  width = ref(0),
-  height = ref(0)
+const x = ref(0)
+const y = ref(0)
+const width = ref(0)
+const height = ref(0)
 let pointer: {
   id: number
   value: Value
@@ -38,14 +43,16 @@ let pointer: {
 } | null = null
 let timer: ReturnType<typeof setTimeout> | undefined
 let suppressClick = false
-// Let the gap/move animation finish before another reorder can begin.
+// 等待间距和换位动画结束，避免反复触发排序。
 let reorderAfter = 0
 let lastReorderX = 0
 const reorderDelay = 100
 const crossingMargin = 8
 const label = computed(() => props.options.find((c) => c.value === dragging.value)?.label)
 function start(event: PointerEvent, value: Value): void {
-  if (event.button !== 0 || dragging.value) return
+  if (event.button !== 0 || dragging.value) {
+    return
+  }
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   pointer = {
     id: event.pointerId,
@@ -63,47 +70,70 @@ function start(event: PointerEvent, value: Value): void {
   window.addEventListener('blur', cancel)
   window.addEventListener('keydown', escape)
 }
+/** 超过移动阈值后才进入拖拽，保留普通点击切换分类的行为。 */
+function beginDrag(event: PointerEvent, value: Value): void {
+  dragging.value = value
+  root.value?.setPointerCapture(event.pointerId)
+  suppressClick = true
+  reorderAfter = performance.now() + reorderDelay
+  lastReorderX = event.clientX
+  void nextTick(() => requestAnimationFrame(enlargeDraggedButton))
+}
+
+function enlargeDraggedButton(): void {
+  if (dragging.value && !settling.value) {
+    floating.value = true
+  }
+}
+
 function move(event: PointerEvent): void {
-  if (!pointer || pointer.id !== event.pointerId) return
-  if (!dragging.value && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) < 5)
+  if (!pointer || pointer.id !== event.pointerId) {
     return
+  }
+  if (!dragging.value && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) < 5) {
+    return
+  }
   event.preventDefault()
   if (!dragging.value) {
-    dragging.value = pointer.value
-    // Keep pointer events and the system arrow on the navigation while dragging.
-    root.value?.setPointerCapture(event.pointerId)
-    suppressClick = true
-    reorderAfter = performance.now() + reorderDelay
-    lastReorderX = event.clientX
-    void nextTick(() =>
-      requestAnimationFrame(() => {
-        if (dragging.value && !settling.value) floating.value = true
-      })
-    )
+    beginDrag(event, pointer.value)
   }
   const container = root.value
-  if (!container) return
+  if (!container) {
+    return
+  }
   const bounds = container.getBoundingClientRect()
-  // Horizontal movement only; include the 10% scale in the end stops.
+  // 仅允许水平移动；边界计算包含放大 10% 后的宽度。
   const inset = width.value * 0.05
   const left = bounds.left + container.clientLeft + inset
   const right = Math.max(left, bounds.right - container.clientLeft - width.value - inset)
   x.value = Math.min(right, Math.max(left, event.clientX - pointer.offsetX))
   y.value = bounds.top + (bounds.height - height.value) / 2
-  if (performance.now() < reorderAfter) return
+  if (performance.now() < reorderAfter) {
+    return
+  }
   if (
     event.clientX < bounds.left ||
     event.clientX > bounds.right ||
     event.clientY < bounds.top ||
     event.clientY > bounds.bottom
-  )
+  ) {
     return
-  const localX = event.clientX - bounds.left - container.clientLeft
-  const from = order.value.indexOf(dragging.value)
-  const direction = Math.sign(event.clientX - lastReorderX)
+  }
+  reorderAt(event.clientX, container, bounds)
+}
+
+/** 换位使用静态布局位置，并保留中心阈值和冷却时间以防抖动。 */
+function reorderAt(clientX: number, container: HTMLElement, bounds: DOMRect): void {
+  const dragged = dragging.value
+  if (!dragged) {
+    return
+  }
+  const localX = clientX - bounds.left - container.clientLeft
+  const from = order.value.indexOf(dragged)
+  const direction = Math.sign(clientX - lastReorderX)
   const targets = [...container.querySelectorAll<HTMLElement>('[data-category]')]
-  // offsetLeft/offsetWidth reflect layout, not TransitionGroup's animated transform.
-  // Require crossing the neighbour's centre and moving in that direction.
+  // 使用布局位置计算目标，避免过渡动画中的变换影响判断。
+  // 指针必须越过相邻按钮中心，并沿对应方向移动。
   const candidates = targets.filter((el) => {
     const index = order.value.indexOf(el.dataset.category as Value)
     const centre = el.offsetLeft + el.offsetWidth / 2
@@ -112,54 +142,74 @@ function move(event: PointerEvent): void {
       : direction < 0 && index < from && localX < centre - crossingMargin
   })
   const target = direction > 0 ? candidates.at(-1) : candidates[0]
-  if (target) {
-    const to = order.value.indexOf(target.dataset.category as Value)
-    order.value.splice(from, 1)
-    order.value.splice(to, 0, dragging.value)
-    lastReorderX = event.clientX
-    reorderAfter = performance.now() + reorderDelay
+  if (!target) {
+    return
   }
+  const to = order.value.indexOf(target.dataset.category as Value)
+  order.value.splice(from, 1)
+  order.value.splice(to, 0, dragged)
+  lastReorderX = clientX
+  reorderAfter = performance.now() + reorderDelay
 }
+
 function cleanup(): void {
-  if (pointer && root.value?.hasPointerCapture(pointer.id))
+  if (pointer && root.value?.hasPointerCapture(pointer.id)) {
     root.value.releasePointerCapture(pointer.id)
+  }
   window.removeEventListener('pointermove', move)
   window.removeEventListener('pointerup', finish)
   window.removeEventListener('pointercancel', cancel)
   window.removeEventListener('blur', cancel)
   window.removeEventListener('keydown', escape)
 }
+
 function finish(): void {
   cleanup()
   pointer = null
-  if (!dragging.value) return
+  if (!dragging.value) {
+    return
+  }
   localStorage.setItem('categoryOrder', JSON.stringify(order.value))
   settling.value = true
   floating.value = false
-  void nextTick(() => {
-    const container = root.value
-    const target = container?.querySelector<HTMLElement>(`[data-category="${dragging.value}"]`)
-    if (container && target) {
-      const bounds = container.getBoundingClientRect()
-      x.value = bounds.left + container.clientLeft + target.offsetLeft
-      y.value = bounds.top + container.clientTop + target.offsetTop
-    }
-    timer = setTimeout(() => {
-      dragging.value = null
-      settling.value = false
-      suppressClick = false
-    }, 220)
-  })
+  void nextTick(settleDraggedButton)
 }
+
+/** 松开后回落到最终布局位置，动画结束前继续屏蔽误触点击。 */
+function settleDraggedButton(): void {
+  const container = root.value
+  const target = container?.querySelector<HTMLElement>(`[data-category="${dragging.value}"]`)
+  if (container && target) {
+    const bounds = container.getBoundingClientRect()
+    x.value = bounds.left + container.clientLeft + target.offsetLeft
+    y.value = bounds.top + container.clientTop + target.offsetTop
+  }
+  timer = setTimeout(resetDragState, 220)
+}
+
+function resetDragState(): void {
+  dragging.value = null
+  settling.value = false
+  suppressClick = false
+}
+
 function cancel(): void {
-  if (pointer) order.value = pointer.original
+  if (pointer) {
+    order.value = pointer.original
+  }
   finish()
 }
+
 function escape(event: KeyboardEvent): void {
-  if (event.key === 'Escape') cancel()
+  if (event.key === 'Escape') {
+    cancel()
+  }
 }
+
 function select(value: Value): void {
-  if (!suppressClick) emit('update:modelValue', value)
+  if (!suppressClick) {
+    emit('update:modelValue', value)
+  }
 }
 onBeforeUnmount(() => {
   cleanup()

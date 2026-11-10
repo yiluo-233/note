@@ -1,4 +1,5 @@
-import type { Category, Status } from '../../../shared/types'
+/** 界面常量：分类名称、作品状态和本地封面地址。 */
+import type { Category, HomeCategory, Status } from '../../../shared/types'
 
 export const CATEGORIES: { value: Category; label: string; producerLabel: string }[] = [
   { value: 'anime', label: '动画', producerLabel: '制作公司' },
@@ -7,7 +8,12 @@ export const CATEGORIES: { value: Category; label: string; producerLabel: string
   { value: 'galgame', label: '视觉小说', producerLabel: '开发商' }
 ]
 
-export const STATUSES: { value: Status; label: string }[] = [
+export const HOME_CATEGORIES: { value: HomeCategory; label: string }[] = [
+  { value: 'all', label: '全部' },
+  ...CATEGORIES
+]
+
+const STATUSES: { value: Status; label: string }[] = [
   { value: 'wish', label: '想看' },
   { value: 'doing', label: '在看' },
   { value: 'done', label: '看过' }
@@ -16,7 +22,7 @@ export const STATUSES: { value: Status; label: string }[] = [
 export const coverUrl = (name: string): string =>
   name ? `cover://local/${encodeURIComponent(name)}` : ''
 
-export function statusesFor(category: Category | 'all'): { value: Status; label: string }[] {
+export function statusesFor(category: HomeCategory): { value: Status; label: string }[] {
   return category === 'galgame'
     ? [
         { value: 'wish', label: '想玩' },

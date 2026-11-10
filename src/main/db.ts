@@ -1,6 +1,7 @@
+/** 本地数据层：维护 SQLite 表结构、作品增删改查和标签查询。 */
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { app } from 'electron'
-import { join } from 'path'
+import { join } from 'node:path'
 import type { Item, ItemFilter, ItemInput } from '../../shared/types'
 
 let db: DatabaseSync
@@ -31,88 +32,110 @@ export function initDb(): void {
   `)
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toItem(r: any): Item {
+type ItemRow = Omit<
+  Item,
+  'originalTitle' | 'coverPath' | 'sourceId' | 'createdAt' | 'updatedAt' | 'tags'
+> & {
+  original_title: string
+  cover_path: string
+  source_id: string
+  created_at: number
+  updated_at: number
+  tags: string
+}
+
+function toItem(row: ItemRow): Item {
   return {
-    id: r.id,
-    category: r.category,
-    title: r.title,
-    originalTitle: r.original_title,
-    year: r.year,
-    producer: r.producer,
-    coverPath: r.cover_path,
-    status: r.status,
-    rating: r.rating,
-    review: r.review,
-    tags: JSON.parse(r.tags),
-    source: r.source,
-    sourceId: r.source_id,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    originalTitle: row.original_title,
+    year: row.year,
+    producer: row.producer,
+    coverPath: row.cover_path,
+    status: row.status,
+    rating: row.rating,
+    review: row.review,
+    tags: JSON.parse(row.tags),
+    source: row.source,
+    sourceId: row.source_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   }
 }
 
-function params(i: ItemInput): Record<string, SQLInputValue> {
+function itemParams(input: ItemInput): Record<string, SQLInputValue> {
   return {
-    category: i.category,
-    title: i.title.trim(),
-    original_title: i.originalTitle,
-    year: i.year,
-    producer: i.producer,
-    cover_path: i.coverPath,
-    status: i.status,
-    rating: i.rating,
-    review: i.review,
-    tags: JSON.stringify([...new Set(i.tags.map((t) => t.trim()).filter(Boolean))]),
-    source: i.source,
-    source_id: i.sourceId
+    category: input.category,
+    title: input.title.trim(),
+    original_title: input.originalTitle,
+    year: input.year,
+    producer: input.producer,
+    cover_path: input.coverPath,
+    status: input.status,
+    rating: input.rating,
+    review: input.review,
+    tags: JSON.stringify([...new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))]),
+    source: input.source,
+    source_id: input.sourceId
   }
 }
 
-export function listItems(f: ItemFilter = {}): Item[] {
+export function listItems(filter: ItemFilter = {}): Item[] {
   const where: string[] = []
   const args: Record<string, SQLInputValue> = {}
-  if (f.category) {
+  if (filter.category) {
     where.push('category = @category')
-    args.category = f.category
+    args.category = filter.category
   }
-  if (f.status) {
+  if (filter.status) {
     where.push('status = @status')
-    args.status = f.status
+    args.status = filter.status
   }
-  if (f.keyword) {
+  if (filter.keyword) {
     where.push('(title LIKE @kw OR original_title LIKE @kw)')
-    args.kw = `%${f.keyword}%`
+    args.kw = `%${filter.keyword}%`
   }
-  if (f.tag) {
+  if (filter.tag) {
     where.push('EXISTS (SELECT 1 FROM json_each(items.tags) WHERE value = @tag)')
-    args.tag = f.tag
+    args.tag = filter.tag
   }
   const sql = `SELECT * FROM items ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC`
-  return db.prepare(sql).all(args).map(toItem)
+  return (db.prepare(sql).all(args) as ItemRow[]).map(toItem)
 }
 
-export function getItem(id: number): Item | null {
-  const r = db.prepare('SELECT * FROM items WHERE id = ?').get(id)
-  return r ? toItem(r) : null
+function getItem(id: number): Item | null {
+  const row = db.prepare('SELECT * FROM items WHERE id = ?').get(id) as ItemRow | undefined
+  return row ? toItem(row) : null
+}
+
+/** 来源判重只读取标识，避免反复加载封面、备注和标签等完整资料。 */
+export function hasSourceItem(source: string, sourceId: string): boolean {
+  return !!db
+    .prepare('SELECT 1 FROM items WHERE source = ? AND source_id = ?')
+    .get(source, sourceId)
+}
+
+export function listSourceKeys(): Set<string> {
+  const rows = db.prepare('SELECT source, source_id FROM items').all()
+  return new Set(rows.map((row) => `${row.source}:${row.source_id}`))
 }
 
 export function addItem(input: ItemInput): Item {
   if (
     ['bangumi', 'neodb'].includes(input.source) &&
     input.sourceId &&
-    db
-      .prepare('SELECT id FROM items WHERE source = ? AND source_id = ?')
-      .get(input.source, input.sourceId)
-  )
+    hasSourceItem(input.source, input.sourceId)
+  ) {
     throw new Error('该作品已在书架中')
+  }
   const now = Date.now()
   const info = db
     .prepare(
       `INSERT INTO items (category,title,original_title,year,producer,cover_path,status,rating,review,tags,source,source_id,created_at,updated_at)
        VALUES (@category,@title,@original_title,@year,@producer,@cover_path,@status,@rating,@review,@tags,@source,@source_id,@now,@now)`
     )
-    .run({ ...params(input), now })
+    .run({ ...itemParams(input), now })
   return getItem(Number(info.lastInsertRowid))!
 }
 
@@ -121,7 +144,7 @@ export function updateItem(id: number, input: ItemInput): Item | null {
     `UPDATE items SET category=@category,title=@title,original_title=@original_title,year=@year,producer=@producer,
      cover_path=@cover_path,status=@status,rating=@rating,review=@review,tags=@tags,source=@source,source_id=@source_id,
      updated_at=@now WHERE id=@id`
-  ).run({ ...params(input), now: Date.now(), id })
+  ).run({ ...itemParams(input), now: Date.now(), id })
   return getItem(id)
 }
 
@@ -133,16 +156,22 @@ export function listTags(): string[] {
   return db
     .prepare('SELECT DISTINCT value FROM items, json_each(items.tags) ORDER BY value')
     .all()
-    .map((r) => (r as unknown as { value: string }).value)
+    .map((row) => row.value as string)
 }
 
 export function deleteItems(ids: number[]): void {
-  if (!Array.isArray(ids) || ids.some((id) => !Number.isSafeInteger(id) || id <= 0))
+  if (!Array.isArray(ids) || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
     throw new Error('无效作品 ID')
+  }
+  if (!ids.length) {
+    return
+  }
   db.exec('BEGIN IMMEDIATE')
   try {
     const statement = db.prepare('DELETE FROM items WHERE id = ?')
-    for (const id of new Set(ids)) statement.run(id)
+    for (const id of new Set(ids)) {
+      statement.run(id)
+    }
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')

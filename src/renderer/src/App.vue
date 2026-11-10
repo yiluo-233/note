@@ -1,148 +1,134 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, computed, ref, watch, nextTick } from 'vue'
-import type { Category, Item, ItemInput, Status } from '../../../shared/types'
-import { CHROME_COLORS } from '../../../shared/theme'
-import BangumiSearch from './components/BangumiSearch.vue'
+/** 应用主界面：组合主页导航、作品列表和弹窗，协调编辑及批量管理。 */
+import { onMounted, onBeforeUnmount, computed, ref, watch } from 'vue'
+import type { Item, ItemInput } from '../../../shared/types'
 import type { ImportDraft } from '../../../shared/bangumi'
-import HighlightText from './components/HighlightText.vue'
+import BangumiSearch from './components/BangumiSearch.vue'
 import ItemEditor from './components/ItemEditor.vue'
-import { CATEGORIES, statusesFor, coverUrl } from './constants'
-
-import { sortItems, type SortOrder } from './sort'
 import CategoryNavigation from './components/CategoryNavigation.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import { statusesFor, coverUrl } from './constants'
+import { useHomeTabs } from './composables/useHomeTabs'
+import { useLibrary } from './composables/useLibrary'
+import { useAppearance, useNavigationPreferences } from './composables/usePreferences'
 
-type HomeCategory = Category | 'all'
-const categoryOptions: { value: HomeCategory; label: string }[] = [
-  { value: 'all', label: '全部' },
-  ...CATEGORIES
-]
-const savedInitial = localStorage.getItem('initialCategory')
-const initialCategory = ref<HomeCategory>(
-  categoryOptions.find((c) => c.value === savedInitial)?.value ?? 'all'
-)
-watch(initialCategory, (value) => {
-  localStorage.setItem('initialCategory', value)
-  if (value !== 'all' && !visibleCategories.value.includes(value))
-    visibleCategories.value.push(value)
-})
-interface HomeTab {
-  id: number
-  category: HomeCategory
-  status: Status | 'all'
-  keyword: string
-  sortOrder: SortOrder
-  scroll: number
-}
-let nextTabId = 1
-function createHomeTab(): HomeTab {
-  return {
-    id: nextTabId++,
-    category: initialCategory.value,
-    status: 'all',
-    keyword: '',
-    sortOrder: 'created',
-    scroll: 0
-  }
-}
-const homeTabs = ref<HomeTab[]>([createHomeTab()])
-const activeTabId = ref(homeTabs.value[0].id)
-const activeTab = computed(() => homeTabs.value.find((tab) => tab.id === activeTabId.value)!)
-const category = computed({
-  get: () => activeTab.value.category,
-  set: (value: HomeCategory) => {
-    activeTab.value.category = value
-  }
-})
-const status = computed({
-  get: () => activeTab.value.status,
-  set: (value: Status | 'all') => {
-    activeTab.value.status = value
-  }
-})
-const keyword = computed({
-  get: () => activeTab.value.keyword,
-  set: (value: string) => {
-    activeTab.value.keyword = value
-  }
-})
-const sortOrder = computed({
-  get: () => activeTab.value.sortOrder,
-  set: (value: SortOrder) => {
-    activeTab.value.sortOrder = value
-  }
-})
-function selectTab(id: number): void {
-  if (id === activeTabId.value || batchBusy.value) return
-  activeTab.value.scroll = window.scrollY
-  cancelManagement()
-  menuOpen.value = false
-  filterMenu.value?.removeAttribute('open')
-  activeTabId.value = id
-  void nextTick(() => {
-    window.scrollTo(0, activeTab.value.scroll)
-    document
-      .getElementById(`home-tab-${id}`)
-      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  })
-}
-function addHomeTab(): void {
-  const tab = createHomeTab()
-  homeTabs.value.push(tab)
-  selectTab(tab.id)
-}
-function closeHomeTab(id: number): void {
-  const index = homeTabs.value.findIndex((tab) => tab.id === id)
-  if (index <= 0 || batchBusy.value) return
-  if (activeTabId.value === id) selectTab(homeTabs.value[index - 1].id)
-  homeTabs.value.splice(index, 1)
-}
-const filterMenu = ref<HTMLDetailsElement | null>(null)
-function dismissFilter(event: PointerEvent): void {
-  if (event.target instanceof Node && !filterMenu.value?.contains(event.target))
-    filterMenu.value?.removeAttribute('open')
-}
-onMounted(() => document.addEventListener('pointerdown', dismissFilter))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', dismissFilter))
 const isWindows = window.api.platform === 'win32'
+const filterMenu = ref<HTMLDetailsElement | null>(null)
+const gearButton = ref<HTMLButtonElement | null>(null)
+const menuOpen = ref(false)
+const settingsOpen = ref(false)
+const locked = ref(false)
 const managing = ref(false)
 const selectedIds = ref(new Set<number>())
-const batchDialog = ref<HTMLDialogElement | null>(null)
 const batchOpen = ref(false)
 const batchBusy = ref(false)
 const batchError = ref('')
+const editing = ref<Item | null>(null)
+const showEditor = ref(false)
+const showSearch = ref(false)
+const draft = ref<ItemInput>()
+const importWarning = ref('')
+
+const {
+  initialCategory,
+  visibleCategories,
+  navigationCategories,
+  navigationReset,
+  isVisible,
+  resetNavigation
+} = useNavigationPreferences()
+const {
+  homeTabs,
+  activeTabId,
+  category,
+  status,
+  keyword,
+  sortOrder,
+  selectTab,
+  addHomeTab,
+  closeHomeTab
+} = useHomeTabs(initialCategory, {
+  canSwitch: () => !batchBusy.value,
+  beforeSwitch: () => {
+    cancelManagement()
+    menuOpen.value = false
+    filterMenu.value?.removeAttribute('open')
+  }
+})
+const { items, sortedItems, loadError, load } = useLibrary({
+  activeTabId,
+  category,
+  status,
+  keyword,
+  sortOrder
+})
+const modalOpen = computed(
+  () => showSearch.value || showEditor.value || settingsOpen.value || batchOpen.value
+)
+const { theme, font, themeError, applyTheme, resetAppearance, syncTitleBar } =
+  useAppearance(modalOpen)
+
+// 隐藏分类时同步所有标签页，避免界面停留在不可见分类。
+watch(
+  visibleCategories,
+  () => {
+    for (const tab of homeTabs.value) {
+      if (!isVisible(tab.category)) {
+        tab.category = 'all'
+      }
+    }
+  },
+  { deep: true }
+)
+watch([category, status, keyword], () => selectedIds.value.clear())
+
 function cancelManagement(): void {
-  if (batchBusy.value) return
+  if (batchBusy.value) {
+    return
+  }
   managing.value = false
-  selectedIds.value = new Set()
+  selectedIds.value.clear()
 }
+
 function manage(): void {
-  if (locked.value) return
+  if (locked.value || batchBusy.value) {
+    return
+  }
   if (!managing.value) {
     managing.value = true
     return
   }
-  if (!selectedIds.value.size) return
+  if (!selectedIds.value.size) {
+    return
+  }
   batchError.value = ''
   batchOpen.value = true
-  batchDialog.value?.showModal()
 }
+
 function clickItem(item: Item): void {
   if (!managing.value) {
     openEditor(item)
     return
   }
-  if (selectedIds.value.has(item.id)) selectedIds.value.delete(item.id)
-  else selectedIds.value.add(item.id)
+  if (selectedIds.value.has(item.id)) {
+    selectedIds.value.delete(item.id)
+  } else {
+    selectedIds.value.add(item.id)
+  }
 }
+
 async function deleteSelected(): Promise<void> {
-  if (batchBusy.value || locked.value || !selectedIds.value.size) return
+  if (batchBusy.value || locked.value || !selectedIds.value.size) {
+    return
+  }
   batchBusy.value = true
   batchError.value = ''
   try {
     await window.api.items.deleteMany([...selectedIds.value])
-    batchDialog.value?.close()
+    batchOpen.value = false
     managing.value = false
-    selectedIds.value = new Set()
+    selectedIds.value.clear()
     await load()
   } catch {
     batchError.value = '删除失败，请重试'
@@ -150,183 +136,41 @@ async function deleteSelected(): Promise<void> {
     batchBusy.value = false
   }
 }
-const locked = ref(false)
+
 function toggleMode(): void {
+  if (batchBusy.value) {
+    return
+  }
   cancelManagement()
   locked.value = !locked.value
   menuOpen.value = false
 }
-const items = ref<Item[]>([])
-const sortedItems = computed(() => sortItems(items.value, sortOrder.value))
-function loadVisibleCategories(): Category[] {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem('visibleCategories') ?? 'null')
-    if (Array.isArray(saved)) return CATEGORIES.map((c) => c.value).filter((c) => saved.includes(c))
-  } catch {
-    /* Use defaults for invalid settings. */
-  }
-  return CATEGORIES.map((c) => c.value)
-}
-const visibleCategories = ref<Category[]>(loadVisibleCategories())
-const navigationCategories = computed(() =>
-  categoryOptions.filter((c) => c.value === 'all' || visibleCategories.value.includes(c.value))
-)
-if (initialCategory.value !== 'all' && !visibleCategories.value.includes(initialCategory.value))
-  visibleCategories.value.push(initialCategory.value)
-watch(
-  visibleCategories,
-  () => {
-    localStorage.setItem('visibleCategories', JSON.stringify(visibleCategories.value))
-    for (const tab of homeTabs.value)
-      if (tab.category !== 'all' && !visibleCategories.value.includes(tab.category))
-        tab.category = 'all'
-    if (initialCategory.value !== 'all' && !visibleCategories.value.includes(initialCategory.value))
-      initialCategory.value = 'all'
-  },
-  { deep: true }
-)
-watch([category, status, keyword], () => {
-  selectedIds.value = new Set()
-})
-const editing = ref<Item | null>(null)
-const showEditor = ref(false)
-const showSearch = ref(false)
-const draft = ref<ItemInput>()
-const importWarning = ref('')
+
+// 搜索与编辑独立显示，取消编辑后仍可返回原来的搜索结果。
 function manualAdd(): void {
+  if (locked.value) {
+    return
+  }
   draft.value = undefined
   importWarning.value = ''
   editing.value = null
   showEditor.value = true
 }
+
 function importSelected(result: ImportDraft): void {
-  if (locked.value) return
+  if (locked.value) {
+    return
+  }
   draft.value = result.input
   importWarning.value = result.warning
   editing.value = null
   showEditor.value = true
 }
-const menuOpen = ref(false)
-const gearButton = ref<HTMLButtonElement | null>(null)
-const settingsOpen = ref(false)
-const settingsSection = ref<'appearance' | 'general' | 'display'>('general')
-const settingsQuery = ref('')
-const resetDialog = ref<HTMLDialogElement | null>(null)
-function matchesSettings(section: 'appearance' | 'general' | 'display'): boolean {
-  const text = {
-    appearance: '外观 主题 浅色 深色 字体 默认字体',
-    general: '通用 语言 中文 English',
-    display: '显示 导航栏 展示 初始界面 启动 默认 全部 动画 电影 书籍 视觉小说'
-  }[section]
-  return text.toLowerCase().includes(settingsQuery.value.trim().toLowerCase())
-}
-watch(settingsQuery, () => {
-  if (!matchesSettings(settingsSection.value)) {
-    const match = (['general', 'appearance', 'display'] as const).find(matchesSettings)
-    if (match) settingsSection.value = match
-  }
-})
-const navigationReset = ref(0)
-const language = ref('zh')
-const font = ref(localStorage.getItem('font') ?? '')
-const fonts = ref<string[]>([])
-const fontLoading = ref(false)
-const settingsError = ref('')
-function applyFont(): void {
-  if (font.value) {
-    document.documentElement.style.setProperty('--app-font', JSON.stringify(font.value))
-    localStorage.setItem('font', font.value)
-  } else {
-    document.documentElement.style.removeProperty('--app-font')
-    localStorage.removeItem('font')
-  }
-}
-watch(font, applyFont)
-onMounted(() => {
-  applyFont()
-  void loadFonts()
-})
-async function loadFonts(): Promise<void> {
-  fontLoading.value = true
-  settingsError.value = ''
-  try {
-    fonts.value = await window.api.fonts.list()
-  } catch {
-    settingsError.value = '字体加载失败'
-  } finally {
-    fontLoading.value = false
-  }
-}
-function resetSettings(): void {
-  resetDialog.value?.close()
-  initialCategory.value = 'all'
-  navigationReset.value++
-  localStorage.removeItem('categoryOrder')
-  visibleCategories.value = CATEGORIES.map((c) => c.value)
-  font.value = ''
-  applyFont()
-  language.value = 'zh'
-  locked.value = false
-  status.value = 'all'
-  category.value = 'all'
-  keyword.value = ''
-  sortOrder.value = 'created'
-  applyTheme(matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-  localStorage.removeItem('theme')
-  settingsError.value = ''
-}
-const settingsDialog = ref<HTMLDialogElement | null>(null)
-function openSettings(): void {
-  menuOpen.value = false
-  settingsOpen.value = true
-  settingsDialog.value?.showModal()
-}
-function closeSettings(): void {
-  settingsDialog.value?.close()
-}
-function onSettingsClosed(): void {
-  settingsOpen.value = false
-  gearButton.value?.focus()
-}
-function onKeydown(event: KeyboardEvent): void {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w') {
-    event.preventDefault()
-    if (!document.querySelector('dialog[open]')) closeHomeTab(activeTabId.value)
-    return
-  }
-  if (event.key === 'Escape' && filterMenu.value?.open) {
-    filterMenu.value.open = false
-    filterMenu.value.querySelector('summary')?.focus()
-  }
-  if (event.key === 'Escape' && menuOpen.value) {
-    menuOpen.value = false
-    gearButton.value?.focus()
-  }
-}
-onMounted(() => document.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
-const theme = ref<'light' | 'dark'>('light')
-
-const loadError = ref('')
-let loadVersion = 0
-
-async function load(): Promise<void> {
-  const version = ++loadVersion
-  loadError.value = ''
-  try {
-    const result = await window.api.items.list({
-      category: category.value === 'all' ? undefined : category.value,
-      status: status.value === 'all' ? undefined : status.value,
-      keyword: keyword.value.trim() || undefined
-    })
-    if (version === loadVersion) items.value = result
-  } catch {
-    if (version === loadVersion) loadError.value = '加载失败，请重试'
-  }
-}
 
 function openEditor(item: Item | null): void {
-  if (locked.value) return
+  if (locked.value) {
+    return
+  }
   if (!item) {
     showSearch.value = true
     return
@@ -343,37 +187,57 @@ async function onSaved(): Promise<void> {
   await load()
 }
 
-function applyTheme(t: 'light' | 'dark'): void {
-  theme.value = t
-  document.documentElement.dataset.theme = t
-  document.documentElement.style.setProperty('--chrome-bg', CHROME_COLORS[t])
-  localStorage.setItem('theme', t)
+function openSettings(): void {
   menuOpen.value = false
-  void window.api.theme
-    .set(t, showSearch.value || showEditor.value || settingsOpen.value || batchOpen.value)
-    .catch(() => {
-      loadError.value = '标题栏主题切换失败，请重试'
-    })
+  settingsOpen.value = true
+}
+
+function resetSettings(): void {
+  resetNavigation()
+  resetAppearance()
+  locked.value = false
+  status.value = 'all'
+  category.value = 'all'
+  keyword.value = ''
+  sortOrder.value = 'created'
+}
+
+function dismissFilter(event: PointerEvent): void {
+  if (event.target instanceof Node && !filterMenu.value?.contains(event.target)) {
+    filterMenu.value?.removeAttribute('open')
+  }
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w') {
+    event.preventDefault()
+    if (!document.querySelector('dialog[open]')) {
+      closeHomeTab(activeTabId.value)
+    }
+    return
+  }
+  if (event.key !== 'Escape') {
+    return
+  }
+  if (filterMenu.value?.open) {
+    filterMenu.value.open = false
+    filterMenu.value.querySelector('summary')?.focus()
+  }
+  if (!menuOpen.value) {
+    return
+  }
+  menuOpen.value = false
+  gearButton.value?.focus()
 }
 
 onMounted(() => {
-  const saved = localStorage.getItem('theme') as 'light' | 'dark' | null
-  applyTheme(
-    saved === 'light' || saved === 'dark'
-      ? saved
-      : matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light'
-  )
+  document.addEventListener('pointerdown', dismissFilter)
+  document.addEventListener('keydown', onKeydown)
 })
-
-watch([showSearch, showEditor, settingsOpen, batchOpen], () => {
-  void window.api.theme
-    .set(theme.value, showSearch.value || showEditor.value || settingsOpen.value || batchOpen.value)
-    .catch(console.error)
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', dismissFilter)
+  document.removeEventListener('keydown', onKeydown)
 })
-
-watch([activeTabId, category, status, keyword], load, { immediate: true })
 </script>
 
 <template>
@@ -554,6 +418,9 @@ watch([activeTabId, category, status, keyword], load, { immediate: true })
         </div>
       </header>
 
+      <p v-if="themeError" role="alert">
+        {{ themeError }} <button @click="syncTitleBar">重试</button>
+      </p>
       <p v-if="loadError" role="alert">{{ loadError }} <button @click="load">重试</button></p>
       <main class="wall">
         <div
@@ -561,11 +428,11 @@ watch([activeTabId, category, status, keyword], load, { immediate: true })
           :key="i.id"
           class="card"
           :class="{ locked }"
-          @click="clickItem(i)"
           :role="managing ? 'checkbox' : undefined"
           :aria-checked="managing ? selectedIds.has(i.id) : undefined"
           :aria-label="managing ? i.title : undefined"
           :tabindex="managing ? 0 : undefined"
+          @click="clickItem(i)"
           @keydown.space.prevent="managing && clickItem(i)"
           @keydown.enter.prevent="managing && clickItem(i)"
         >
@@ -596,243 +463,24 @@ watch([activeTabId, category, status, keyword], load, { immediate: true })
         <div v-if="!items.length" class="empty">还没有条目，点右上角「添加」开始吧</div>
       </main>
     </div>
-    <dialog
-      ref="settingsDialog"
-      class="settings-dialog"
-      aria-labelledby="settings-title"
-      @close="onSettingsClosed"
-      @click="
-        (event) => {
-          if (event.target === settingsDialog) closeSettings()
-        }
-      "
-    >
-      <div class="settings-inner">
-        <header class="settings-header">
-          <h2 id="settings-title">设置</h2>
-          <button class="close-settings" aria-label="关闭设置" autofocus @click="closeSettings">
-            ×
-          </button>
-        </header>
-        <div class="settings-layout">
-          <nav class="settings-nav" aria-label="设置分类">
-            <input
-              v-model="settingsQuery"
-              type="search"
-              class="settings-search"
-              placeholder="搜索设置..."
-              aria-label="搜索设置"
-            />
-            <div class="settings-nav-scroll">
-              <button
-                v-show="matchesSettings('general')"
-                :class="{ active: settingsSection === 'general' }"
-                :aria-pressed="settingsSection === 'general'"
-                @click="settingsSection = 'general'"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  aria-hidden="true"
-                >
-                  <path d="M4 6h16M4 12h16M4 18h16" />
-                  <circle cx="8" cy="6" r="2" fill="var(--surface)" />
-                  <circle cx="16" cy="12" r="2" fill="var(--surface)" />
-                  <circle cx="10" cy="18" r="2" fill="var(--surface)" /></svg
-                ><HighlightText text="通用" :query="settingsQuery" />
-              </button>
-              <button
-                v-show="matchesSettings('appearance')"
-                :class="{ active: settingsSection === 'appearance' }"
-                :aria-pressed="settingsSection === 'appearance'"
-                @click="settingsSection = 'appearance'"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  aria-hidden="true"
-                >
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" /></svg
-                ><HighlightText text="外观" :query="settingsQuery" />
-              </button>
-              <button
-                v-show="matchesSettings('display')"
-                :class="{ active: settingsSection === 'display' }"
-                :aria-pressed="settingsSection === 'display'"
-                @click="settingsSection = 'display'"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="4" width="18" height="13" rx="2" />
-                  <path d="M8 21h8M12 17v4" /></svg
-                ><HighlightText text="显示" :query="settingsQuery" />
-              </button>
-            </div>
-            <button class="reset-settings" @click="resetDialog?.showModal()">恢复默认设置</button>
-          </nav>
-          <section
-            v-if="settingsSection === 'appearance' && matchesSettings('appearance')"
-            class="settings-content"
-            aria-labelledby="appearance-title"
-          >
-            <h3 id="appearance-title"><HighlightText text="外观" :query="settingsQuery" /></h3>
-            <div class="settings-group">
-              <div class="settings-row">
-                <span id="theme-label"
-                  ><span class="setting-name"
-                    ><HighlightText text="主题" :query="settingsQuery" /><small
-                      >设置界面主题。</small
-                    ></span
-                  ></span
-                >
-                <div class="theme-options" role="group" aria-labelledby="theme-label">
-                  <button
-                    :class="{ active: theme === 'light' }"
-                    :aria-pressed="theme === 'light'"
-                    @click="applyTheme('light')"
-                  >
-                    <HighlightText text="浅色" :query="settingsQuery" />
-                  </button>
-                  <button
-                    :class="{ active: theme === 'dark' }"
-                    :aria-pressed="theme === 'dark'"
-                    @click="applyTheme('dark')"
-                  >
-                    <HighlightText text="深色" :query="settingsQuery" />
-                  </button>
-                </div>
-              </div>
-              <label class="settings-row font-row"
-                ><span class="setting-name"
-                  ><HighlightText text="字体" :query="settingsQuery" /><small
-                    >设置界面字体。</small
-                  ></span
-                >
-                <select v-model="font" :disabled="fontLoading">
-                  <option value="">默认字体</option>
-                  <option v-if="font && !fonts.includes(font)" :value="font">{{ font }}</option>
-                  <option v-for="name in fonts" :key="name" :value="name">{{ name }}</option>
-                </select>
-              </label>
-            </div>
-            <p v-if="settingsError" role="alert">
-              {{ settingsError }} <button @click="loadFonts">重试</button>
-            </p>
-          </section>
-          <section
-            v-else-if="settingsSection === 'general' && matchesSettings('general')"
-            class="settings-content"
-            aria-labelledby="general-title"
-          >
-            <h3 id="general-title"><HighlightText text="通用" :query="settingsQuery" /></h3>
-            <div class="settings-group">
-              <label class="settings-row"
-                ><span class="setting-name"
-                  ><HighlightText text="语言" :query="settingsQuery" /><small
-                    >设置界面语言。</small
-                  ></span
-                >
-                <select v-model="language">
-                  <option value="zh">简体中文</option>
-                  <option value="en">English</option>
-                </select>
-              </label>
-            </div>
-          </section>
-          <section
-            v-else-if="settingsSection === 'display' && matchesSettings('display')"
-            class="settings-content"
-            aria-labelledby="navigation-title"
-          >
-            <h3 id="navigation-title"><HighlightText text="导航栏" :query="settingsQuery" /></h3>
-            <div class="settings-group">
-              <div class="settings-row">
-                <span class="setting-name"
-                  ><HighlightText text="展示" :query="settingsQuery" /><small
-                    >设置顶部导航栏显示的分类。</small
-                  ></span
-                >
-                <div class="category-checks" role="group" aria-label="展示分类">
-                  <label v-for="c in CATEGORIES" :key="c.value"
-                    ><input
-                      v-model="visibleCategories"
-                      type="checkbox"
-                      :value="c.value" /><HighlightText :text="c.label" :query="settingsQuery"
-                  /></label>
-                </div>
-              </div>
-            </div>
-            <h3 class="initial-heading">
-              <HighlightText text="初始界面" :query="settingsQuery" />
-            </h3>
-            <div class="settings-group">
-              <div class="settings-row">
-                <span class="setting-name"><small>设置软件启动时默认显示的界面。</small></span>
-                <div class="category-checks" role="radiogroup" aria-label="初始界面">
-                  <label v-for="c in categoryOptions" :key="c.value">
-                    <input
-                      v-model="initialCategory"
-                      type="radio"
-                      name="initial-category"
-                      :value="c.value"
-                    />
-                    <HighlightText :text="c.label" :query="settingsQuery" />
-                  </label>
-                </div>
-              </div>
-            </div>
-          </section>
-          <p v-else class="settings-content">无匹配项</p>
-        </div>
-      </div>
-    </dialog>
-    <dialog ref="resetDialog" class="reset-dialog" aria-labelledby="reset-title">
-      <h3 id="reset-title">恢复默认设置？</h3>
-      <div class="reset-actions">
-        <button autofocus @click="resetDialog?.close()">取消</button
-        ><button class="primary" @click="resetSettings">确定</button>
-      </div>
-    </dialog>
-    <dialog
-      ref="batchDialog"
-      class="batch-dialog"
-      aria-labelledby="batch-title"
-      @close="batchOpen = false"
-      @cancel.prevent="!batchBusy && batchDialog?.close()"
-    >
-      <div class="batch-content">
-        <p id="batch-title">是否删除选中的 {{ selectedIds.size }} 部作品？</p>
-        <p v-if="batchError" role="alert">{{ batchError }}</p>
-        <div class="batch-actions">
-          <button class="batch-confirm" :disabled="batchBusy" @click="deleteSelected">
-            {{ batchBusy ? '删除中…' : '删除' }}</button
-          ><button
-            class="batch-cancel"
-            autofocus
-            :disabled="batchBusy"
-            @click="batchDialog?.close()"
-          >
-            取消
-          </button>
-        </div>
-      </div>
-    </dialog>
+    <SettingsDialog
+      v-model:open="settingsOpen"
+      v-model:font="font"
+      v-model:initial-category="initialCategory"
+      v-model:visible-categories="visibleCategories"
+      :theme="theme"
+      @theme="applyTheme"
+      @reset="resetSettings"
+      @closed="gearButton?.focus()"
+    />
+    <ConfirmDialog
+      v-model:open="batchOpen"
+      :message="`是否删除选中的 ${selectedIds.size} 部作品？`"
+      :confirm-label="batchBusy ? '删除中…' : '删除'"
+      :busy="batchBusy"
+      :error="batchError"
+      @confirm="deleteSelected"
+    />
     <BangumiSearch
       v-if="showSearch"
       :category="category === 'all' ? undefined : category"
@@ -853,9 +501,6 @@ watch([activeTabId, category, status, keyword], load, { immediate: true })
 </template>
 
 <style scoped>
-.settings-content .initial-heading {
-  margin-top: 24px;
-}
 .windows-shell .window-titlebar {
   padding-right: 150px;
 }
@@ -947,22 +592,6 @@ watch([activeTabId, category, status, keyword], load, { immediate: true })
   color: var(--text);
 }
 
-.category-checks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-}
-.category-checks label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-.category-checks input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 button.batch-delete {
   background: #d32f2f;
   border-color: #d32f2f;
@@ -990,130 +619,6 @@ button.batch-delete {
 .card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-}
-.batch-dialog {
-  width: min(380px, calc(100vw - 48px));
-  padding: 0;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 20px 64px #0005;
-}
-.batch-dialog::backdrop {
-  background: #0008;
-}
-.batch-content {
-  min-height: 170px;
-  padding: 26px 22px 18px;
-  display: flex;
-  flex-direction: column;
-}
-.batch-content p {
-  margin: 10px 0 24px;
-  font-size: 16px;
-}
-.batch-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: auto;
-}
-.batch-confirm {
-  color: #d32f2f;
-  border-color: #d32f2f;
-}
-.batch-cancel {
-  color: #111;
-  background: white;
-  border-color: #bfc3ca;
-}
-
-.setting-name {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.setting-name small {
-  font-size: 85%;
-  color: var(--text-2);
-  font-weight: normal;
-}
-
-.settings-search {
-  width: calc(100% - 6px);
-  min-width: 0;
-  padding: 5px 6px;
-  font-size: 12px;
-}
-.settings-nav-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: scroll;
-  --scrollbar-size: 5.4px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.settings-nav-scroll button {
-  flex-shrink: 0;
-  width: 100%;
-}
-.settings-nav .reset-settings {
-  border: 1px solid var(--border);
-  margin-right: 6px;
-  flex-shrink: 0;
-}
-.settings-group {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  overflow: hidden;
-}
-.settings-group > .settings-row + .settings-row {
-  border-top: 1px solid var(--border);
-}
-.reset-dialog {
-  width: min(320px, calc(100vw - 48px));
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
-}
-.reset-dialog::backdrop {
-  background: #0008;
-}
-.reset-dialog h3 {
-  margin: 0 0 24px;
-}
-.reset-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.settings-nav button,
-.settings-content h3 {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.settings-nav svg,
-.settings-content h3 svg {
-  flex-shrink: 0;
-}
-.settings-nav .reset-settings {
-  margin-top: auto;
-  padding: 7px 3px;
-  font-size: 12px;
-  justify-content: center;
-}
-.font-row {
-  margin-top: 0;
-}
-.font-row select {
-  max-width: min(280px, 100%);
 }
 
 .home-placeholder,
@@ -1192,10 +697,7 @@ button:disabled {
   --sidebar-width: 42px;
   padding-top: var(--titlebar-height);
 }
-.windows-shell {
-  --titlebar-height: 33px;
-}
-/* Continue the sidebar border through the titlebar without intercepting input. */
+/* 将侧边栏分隔线延伸到标题栏，同时不拦截输入事件。 */
 .window-titlebar::before {
   content: '';
   position: absolute;
@@ -1302,112 +804,6 @@ button:disabled {
 .app-menu button:hover {
   background: var(--bg);
 }
-.settings-dialog {
-  padding: 0;
-  width: min(780px, calc(100vw - 64px));
-  height: min(580px, calc(100vh - 64px));
-  max-width: none;
-  max-height: none;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  color: var(--text);
-  background: var(--bg);
-  box-shadow: 0 24px 80px #0006;
-}
-.settings-dialog::backdrop {
-  background: #0008;
-}
-.settings-inner {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-}
-.settings-header h2 {
-  margin: 0;
-  font-size: 20px;
-}
-.close-settings {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  font-size: 24px;
-  background: transparent;
-  border-color: transparent;
-}
-.settings-layout {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-.settings-nav {
-  width: 140px;
-  flex-shrink: 0;
-  padding: 10px 0 10px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-}
-.settings-nav button {
-  text-align: left;
-  border-color: transparent;
-  padding: 7px 10px;
-}
-.settings-nav button.active {
-  color: var(--accent);
-  background: var(--bg);
-  border-color: var(--border);
-}
-.settings-content {
-  flex: 1;
-  min-width: 0;
-  padding: 14px;
-  overflow-y: auto;
-}
-.settings-content h3 {
-  margin: 0 0 12px;
-  font-size: 18px;
-}
-.settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 10px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.theme-options {
-  display: flex;
-  gap: 4px;
-}
-.theme-options button.active {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.settings-row select {
-  min-width: 120px;
-}
-@media (max-width: 560px) {
-  .settings-nav {
-    width: 90px;
-    padding: 12px 6px;
-  }
-  .settings-content {
-    padding: 16px;
-  }
-}
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -1424,30 +820,6 @@ button:focus-visible {
   padding: 10px 16px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
-}
-.tabs {
-  display: flex;
-  gap: 0;
-  padding: 0;
-  height: 34px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.tabs button {
-  border: 0;
-  background: transparent;
-  border-radius: 5px;
-  padding: 6px 10px;
-  white-space: nowrap;
-}
-.tabs button:hover {
-  background: var(--bg);
-}
-.tabs button.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
 }
 .search {
   width: clamp(130px, 18vw, 220px);
@@ -1502,12 +874,6 @@ button:focus-visible {
 .toolbar-actions > button,
 .toolbar .filter-menu > summary {
   height: 34px;
-  padding-top: 0;
-  padding-bottom: 0;
-  line-height: 32px;
-}
-.toolbar .tabs button {
-  height: 32px;
   padding-top: 0;
   padding-bottom: 0;
   line-height: 32px;

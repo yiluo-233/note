@@ -1,8 +1,10 @@
 <script setup lang="ts">
+/** 作品搜索弹窗：聚合来源检索、防抖分页并导入选中的条目。 */
+
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { paginationPages } from '../pagination'
 import type { Category } from '../../../../shared/types'
-import type { SearchResult, SearchPage, ImportDraft } from '../../../../shared/bangumi'
+import { SEARCH_PAGE_SIZE, type SearchResult, type ImportDraft } from '../../../../shared/bangumi'
 const props = defineProps<{ category?: Category }>()
 const emit = defineEmits<{ close: []; manual: []; selected: [draft: ImportDraft] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
@@ -14,11 +16,9 @@ const error = ref('')
 const searched = ref(false)
 const total = ref(0)
 let active = true
-let query = ''
 const currentPage = ref(1)
-const pageCount = computed(() => Math.ceil(total.value / 10))
+const pageCount = computed(() => Math.ceil(total.value / SEARCH_PAGE_SIZE))
 const visiblePages = computed(() => paginationPages(pageCount.value, currentPage.value))
-const pageCache = new Map<number, SearchPage>()
 let version = 0
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(keyword, () => {
@@ -26,15 +26,15 @@ watch(keyword, () => {
   version++
   results.value = []
   currentPage.value = 1
-  pageCache.clear()
   total.value = 0
   searched.value = false
   error.value = ''
   busy.value = false
-  if (keyword.value.trim())
+  if (keyword.value.trim()) {
     timer = setTimeout(() => {
       void search()
     }, 350)
+  }
 })
 onMounted(() => dialog.value?.showModal())
 onBeforeUnmount(() => {
@@ -44,22 +44,22 @@ onBeforeUnmount(() => {
 })
 async function search(pageNumber = 1): Promise<void> {
   clearTimeout(timer)
-  if (importing.value || !keyword.value.trim()) return
-  const nextQuery = keyword.value.trim()
-  if (query !== nextQuery) {
-    query = nextQuery
-    pageCache.clear()
-    total.value = 0
+  if (importing.value || !keyword.value.trim()) {
+    return
   }
+  const query = keyword.value.trim()
   const requestVersion = ++version
   busy.value = true
   error.value = ''
   try {
-    const page =
-      pageCache.get(pageNumber) ??
-      (await window.api.bangumi.search(query, props.category, (pageNumber - 1) * 10))
-    if (!active || requestVersion !== version) return
-    pageCache.set(pageNumber, page)
+    const page = await window.api.bangumi.search(
+      query,
+      props.category,
+      (pageNumber - 1) * SEARCH_PAGE_SIZE
+    )
+    if (!active || requestVersion !== version) {
+      return
+    }
     error.value = page.warning ?? ''
     results.value = page.results
     total.value = page.total
@@ -67,21 +67,31 @@ async function search(pageNumber = 1): Promise<void> {
     searched.value = true
     dialog.value?.querySelector('.results')?.scrollTo(0, 0)
   } catch (e) {
-    if (active && requestVersion === version)
+    if (active && requestVersion === version) {
       error.value = e instanceof Error ? e.message : '搜索失败，请重试'
+    }
   } finally {
-    if (active && requestVersion === version) busy.value = false
+    if (active && requestVersion === version) {
+      busy.value = false
+    }
   }
 }
+
 async function select(result: SearchResult): Promise<void> {
-  if (importing.value || result.exists) return
+  if (importing.value || result.exists) {
+    return
+  }
   importing.value = true
   error.value = ''
   try {
     const draft = await window.api.bangumi.import(result.source, result.id)
-    if (active) emit('selected', draft)
+    if (active) {
+      emit('selected', draft)
+    }
   } catch (e) {
-    if (active) error.value = e instanceof Error ? e.message : '获取资料失败，请重试'
+    if (active) {
+      error.value = e instanceof Error ? e.message : '获取资料失败，请重试'
+    }
   } finally {
     importing.value = false
   }
@@ -92,11 +102,7 @@ async function select(result: SearchResult): Promise<void> {
     ref="dialog"
     aria-labelledby="search-title"
     @cancel.prevent="emit('close')"
-    @click="
-      (e) => {
-        if (e.target === dialog) emit('close')
-      }
-    "
+    @click.self="emit('close')"
   >
     <div class="inner">
       <header>

@@ -1,3 +1,4 @@
+/* 全局样式：明暗主题、基础控件、强调色及滚动条。 */
 :root {
   color-scheme: light;
   accent-color: var(--accent);
@@ -61,7 +62,7 @@ textarea:focus {
   border-color: var(--accent);
 }
 
-/* Windows standard scrollbar: 17px reduced by 10%; narrow navigation: 6px reduced by 10%. */
+/* 滚动条宽度：标准宽度 17px 缩小 10%，导航栏窄滚动条 6px 缩小 10%。 */
 :root {
   --scrollbar-size: 15.3px;
 }

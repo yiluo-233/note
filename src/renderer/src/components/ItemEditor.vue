@@ -1,7 +1,10 @@
 <script setup lang="ts">
+/** 作品编辑弹窗：维护表单、校验输入，并处理封面、标签及删除确认。 */
+
 import { onMounted, reactive, ref, computed } from 'vue'
 import type { Category, Item, ItemInput } from '../../../../shared/types'
 import SelectMenu from './SelectMenu.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
 import { CATEGORIES, statusesFor, coverUrl } from '../constants'
 
 const props = defineProps<{
@@ -50,57 +53,58 @@ onMounted(async () => {
 })
 
 function addTag(): void {
-  const t = tagInput.value.trim()
-  if (t && !form.tags.includes(t)) form.tags.push(t)
+  const tag = tagInput.value.trim()
+  if (tag && !form.tags.includes(tag)) {
+    form.tags.push(tag)
+  }
   tagInput.value = ''
 }
 
 async function pickCover(): Promise<void> {
   try {
     const name = await window.api.cover.pick()
-    if (name) form.coverPath = name
+    if (name) {
+      form.coverPath = name
+    }
   } catch {
     error.value = '选择封面失败，请重试'
   }
 }
 
 async function save(): Promise<void> {
-  if (busy.value) return
+  if (busy.value) {
+    return
+  }
   error.value = ''
   if (!form.title.trim()) {
     error.value = '请填写标题'
     return
   }
 
-  const r = String(ratingStr.value ?? '').trim()
-  if (r === '') {
-    form.rating = null
-  } else {
-    const n = Number(r)
-    if (Number.isNaN(n) || n < 0 || n > 10 || (n * 2) % 1 !== 0) {
-      error.value = '评分需为 0~10，且以 0.5 为步进'
-      return
-    }
-    form.rating = n
+  const ratingText = String(ratingStr.value ?? '').trim()
+  const rating = ratingText === '' ? null : Number(ratingText)
+  if (
+    rating !== null &&
+    (!Number.isFinite(rating) || rating < 0 || rating > 10 || (rating * 2) % 1 !== 0)
+  ) {
+    error.value = '评分需为 0~10，且以 0.5 为步进'
+    return
   }
+  form.rating = rating
 
-  const y = String(yearStr.value ?? '').trim()
-  if (y !== '' && (!Number.isInteger(Number(y)) || Number(y) < 1 || Number(y) > 9999)) {
+  const yearText = String(yearStr.value ?? '').trim()
+  const year = yearText === '' ? null : Number(yearText)
+  if (year !== null && (!Number.isInteger(year) || year < 1 || year > 9999)) {
     error.value = '年份需为 1~9999 的整数'
     return
   }
-  form.year = y === '' ? null : Number(y)
+  form.year = year
 
-  addTag() // 输入框里没按回车的标签也一并收进来
+  addTag() // 同时保存输入框中尚未按回车确认的标签。
   busy.value = true
   try {
-    const data: ItemInput = JSON.parse(JSON.stringify(form))
-    if (props.item) {
-      const updated = await window.api.items.update(props.item.id, data)
-      if (!updated) throw new Error('条目已不存在')
-    } else {
-      await window.api.items.add(data)
-    }
+    const data: ItemInput = { ...form, tags: [...form.tags] }
+    await persistItem(data)
     emit('saved')
   } catch (cause) {
     error.value = cause instanceof Error ? `保存失败：${cause.message}` : '保存失败，请重试'
@@ -109,26 +113,46 @@ async function save(): Promise<void> {
   }
 }
 
-const confirmDialog = ref<HTMLDialogElement | null>(null)
+/** 只负责持久化，让保存流程专注于校验与状态恢复。 */
+async function persistItem(data: ItemInput): Promise<void> {
+  if (!props.item) {
+    await window.api.items.add(data)
+    return
+  }
+  const updated = await window.api.items.update(props.item.id, data)
+  if (!updated) {
+    throw new Error('条目已不存在')
+  }
+}
+
+const confirmOpen = ref(false)
 const confirmAction = ref<'delete' | 'cover'>('delete')
 const confirmError = ref('')
 function askConfirmation(action: 'delete' | 'cover'): void {
-  if (busy.value) return
+  if (busy.value) {
+    return
+  }
   confirmAction.value = action
   confirmError.value = ''
-  confirmDialog.value?.showModal()
+  confirmOpen.value = true
 }
+
 async function confirmChange(): Promise<void> {
-  if (busy.value) return
+  if (busy.value) {
+    return
+  }
   if (confirmAction.value === 'cover') {
     form.coverPath = ''
-    confirmDialog.value?.close()
+    confirmOpen.value = false
     return
   }
   await remove()
 }
+
 async function remove(): Promise<void> {
-  if (busy.value || !props.item) return
+  if (busy.value || !props.item) {
+    return
+  }
   busy.value = true
   error.value = ''
   try {
@@ -148,11 +172,7 @@ async function remove(): Promise<void> {
     class="editor-modal"
     aria-label="编辑作品"
     @cancel.prevent="!busy && emit('close')"
-    @click="
-      (e) => {
-        if (e.target === editorDialog && !busy) emit('close')
-      }
-    "
+    @click.self="!busy && emit('close')"
   >
     <div class="dialog">
       <h3>{{ item ? '编辑条目' : '添加条目' }}</h3>
@@ -210,7 +230,7 @@ async function remove(): Promise<void> {
               <option v-for="t in allTags" :key="t" :value="t" />
             </datalist>
           </label>
-          <div class="chips" v-if="form.tags.length">
+          <div v-if="form.tags.length" class="chips">
             <span v-for="t in form.tags" :key="t" class="chip">
               {{ t }} <a @click="form.tags.splice(form.tags.indexOf(t), 1)">×</a>
             </span>
@@ -231,27 +251,14 @@ async function remove(): Promise<void> {
       </div>
     </div>
   </dialog>
-  <dialog
-    ref="confirmDialog"
-    class="confirm-dialog"
-    aria-labelledby="confirm-message"
-    @cancel.prevent="!busy && confirmDialog?.close()"
-  >
-    <div class="confirm-content">
-      <p id="confirm-message">
-        {{ confirmAction === 'delete' ? '是否删除该作品？' : '是否移除该封面' }}
-      </p>
-      <p v-if="confirmError" role="alert">{{ confirmError }}</p>
-      <div class="confirm-actions">
-        <button class="confirm-danger" :disabled="busy" @click="confirmChange">
-          {{ confirmAction === 'delete' ? '删除' : '移除' }}
-        </button>
-        <button class="confirm-cancel" autofocus :disabled="busy" @click="confirmDialog?.close()">
-          取消
-        </button>
-      </div>
-    </div>
-  </dialog>
+  <ConfirmDialog
+    v-model:open="confirmOpen"
+    :message="confirmAction === 'delete' ? '是否删除该作品？' : '是否移除该封面？'"
+    :confirm-label="confirmAction === 'delete' ? '删除' : '移除'"
+    :busy="busy"
+    :error="confirmError"
+    @confirm="confirmChange"
+  />
 </template>
 
 <style scoped>
@@ -265,55 +272,6 @@ async function remove(): Promise<void> {
 .row > .select-field {
   flex: 1;
   min-width: 0;
-}
-.confirm-dialog {
-  width: min(380px, calc(100vw - 48px));
-  padding: 0;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 20px 64px #0005;
-}
-.confirm-dialog::backdrop {
-  background: #0008;
-}
-.confirm-content {
-  min-height: 170px;
-  padding: 26px 22px 18px;
-  display: flex;
-  flex-direction: column;
-}
-.confirm-content p {
-  margin: 10px 0 24px;
-  font-size: 16px;
-}
-.confirm-content p[role='alert'] {
-  color: var(--danger);
-  font-size: 12px;
-}
-.confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: auto;
-}
-.confirm-danger {
-  color: #d32f2f;
-  border-color: #d32f2f;
-}
-.confirm-cancel {
-  color: #111;
-  background: #fff;
-  border-color: #bfc3ca;
-}
-.confirm-actions button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.confirm-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 .editor-modal {

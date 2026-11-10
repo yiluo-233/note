@@ -1,3 +1,4 @@
+/** 进程通信：注册界面调用的作品、搜索、主题、字体和封面接口。 */
 import { ipcMain, nativeTheme, BrowserWindow } from 'electron'
 import { addItem, deleteItems, deleteItem, listItems, listTags, updateItem } from './db'
 import type { ItemFilter, ItemInput } from '../../shared/types'
@@ -6,6 +7,21 @@ import { searchCatalog, importCatalog } from './catalog'
 import { listFonts } from './fonts'
 import { pickCover } from './covers'
 
+/** 与弹窗遮罩保持一致，压暗原生窗口控件颜色。 */
+function dim(hex: string): string {
+  const channels = hex.slice(1).match(/../g) ?? []
+  return (
+    '#' +
+    channels
+      .map((channel) =>
+        Math.round((parseInt(channel, 16) * 7) / 15)
+          .toString(16)
+          .padStart(2, '0')
+      )
+      .join('')
+  )
+}
+
 export function registerIpc(): void {
   ipcMain.handle('fonts:list', () => listFonts())
   ipcMain.handle('bangumi:search', (_e, keyword, category, offset) =>
@@ -13,19 +29,12 @@ export function registerIpc(): void {
   )
   ipcMain.handle('bangumi:import', (_e, source, id) => importCatalog(source, id))
   ipcMain.handle('theme:set', (_e, theme: unknown, dimmed: unknown = false) => {
-    if (theme !== 'light' && theme !== 'dark') throw new Error('Invalid theme')
-    if (typeof dimmed !== 'boolean') throw new Error('Invalid modal state')
-    const dim = (hex: string): string =>
-      '#' +
-      hex
-        .slice(1)
-        .match(/../g)!
-        .map((c) =>
-          Math.round((parseInt(c, 16) * 7) / 15)
-            .toString(16)
-            .padStart(2, '0')
-        )
-        .join('')
+    if (theme !== 'light' && theme !== 'dark') {
+      throw new Error('无效主题')
+    }
+    if (typeof dimmed !== 'boolean') {
+      throw new Error('无效弹窗状态')
+    }
     nativeTheme.themeSource = theme
     if (process.platform === 'win32') {
       BrowserWindow.fromWebContents(_e.sender)?.setTitleBarOverlay({

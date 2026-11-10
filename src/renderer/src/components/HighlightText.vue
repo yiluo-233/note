@@ -1,20 +1,28 @@
 <script setup lang="ts">
+/** 文本高亮：按查询词拆分内容，以普通文本安全呈现匹配结果。 */
+
 import { computed } from 'vue'
 const props = defineProps<{ text: string; query: string }>()
 const parts = computed(() => {
   const query = props.query.trim().toLocaleLowerCase()
-  if (!query) return [{ text: props.text, match: false }]
+  if (!query) {
+    return [{ text: props.text, match: false }]
+  }
   const result: { text: string; match: boolean }[] = []
   const lower = props.text.toLocaleLowerCase()
   let cursor = 0
   let index = lower.indexOf(query)
   while (index !== -1) {
-    if (index > cursor) result.push({ text: props.text.slice(cursor, index), match: false })
+    if (index > cursor) {
+      result.push({ text: props.text.slice(cursor, index), match: false })
+    }
     result.push({ text: props.text.slice(index, index + query.length), match: true })
     cursor = index + query.length
     index = lower.indexOf(query, cursor)
   }
-  if (cursor < props.text.length) result.push({ text: props.text.slice(cursor), match: false })
+  if (cursor < props.text.length) {
+    result.push({ text: props.text.slice(cursor), match: false })
+  }
   return result
 })
 </script>

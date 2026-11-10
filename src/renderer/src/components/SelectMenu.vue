@@ -1,4 +1,6 @@
 <script setup lang="ts" generic="T extends string">
+/** 通用单选菜单：处理选项选择、键盘导航及焦点恢复。 */
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 const props = defineProps<{
   modelValue: T
@@ -16,7 +18,9 @@ const selectedLabel = computed(
   () => props.options.find((o) => o.value === props.modelValue)?.label ?? ''
 )
 async function open(): Promise<void> {
-  if (props.disabled) return
+  if (props.disabled) {
+    return
+  }
   focused.value = Math.max(
     0,
     props.options.findIndex((o) => o.value === props.modelValue)
@@ -25,44 +29,64 @@ async function open(): Promise<void> {
   await nextTick()
   focusOption()
 }
+
 function focusOption(): void {
   root.value?.querySelectorAll<HTMLButtonElement>('[role="option"]')[focused.value]?.focus()
 }
+
 function close(restore = false): void {
   opened.value = false
-  if (restore) trigger.value?.focus()
+  if (restore) {
+    trigger.value?.focus()
+  }
 }
+
 function choose(value: T): void {
   emit('update:modelValue', value)
   close(true)
 }
+
 function focusOut(event: FocusEvent): void {
-  if (event.relatedTarget instanceof Node && !root.value?.contains(event.relatedTarget)) close()
+  if (event.relatedTarget instanceof Node && !root.value?.contains(event.relatedTarget)) {
+    close()
+  }
 }
+
 function outside(event: PointerEvent): void {
-  if (event.target instanceof Node && !root.value?.contains(event.target)) close()
+  if (event.target instanceof Node && !root.value?.contains(event.target)) {
+    close()
+  }
 }
+
 function keydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && opened.value) {
     event.preventDefault()
     event.stopPropagation()
     close(true)
+    return
   }
-  if (event.key === 'Tab') close()
-  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-    event.preventDefault()
-    if (!opened.value) {
-      void open()
-      return
-    }
-    if (event.key === 'Home') focused.value = 0
-    else if (event.key === 'End') focused.value = props.options.length - 1
-    else
-      focused.value =
-        (focused.value + (event.key === 'ArrowDown' ? 1 : -1) + props.options.length) %
-        props.options.length
-    focusOption()
+  if (event.key === 'Tab') {
+    close()
+    return
   }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    return
+  }
+  event.preventDefault()
+  if (!opened.value) {
+    void open()
+    return
+  }
+  if (event.key === 'Home') {
+    focused.value = 0
+  } else if (event.key === 'End') {
+    focused.value = props.options.length - 1
+  } else {
+    focused.value =
+      (focused.value + (event.key === 'ArrowDown' ? 1 : -1) + props.options.length) %
+      props.options.length
+  }
+  focusOption()
 }
 onMounted(() => document.addEventListener('pointerdown', outside))
 onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
